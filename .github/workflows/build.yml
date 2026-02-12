@@ -121,51 +121,49 @@ jobs:
             *.platform=${{ matrix.platform }}
 
   windows-native:
-    if: ${{ github.event.inputs.build_target == 'windows' || github.event.inputs.build_target == 'all' || github.event.inputs.build_target == 'windows-docker' }}
+    if: ${{ github.event.inputs.build_target == 'windows' || github.event.inputs.build_target == 'all' }}
     runs-on: windows-2022
-    env:
-      VERSION: ${{ github.event.inputs.version || '' }}
 
     steps:
-      - name: Checkout
-        uses: actions/checkout@v6
+      - name: Set up GOPATH
+        run: |
+          setx GOPATH "%USERPROFILE%\go"
+          set GOPATH "%USERPROFILE%\go"
+          echo "GOPATH=%USERPROFILE%\go" >> $GITHUB_ENV
+
+      - name: Clone repo into GOPATH
+        run: |
+          set GOPATH "%USERPROFILE%\go"
+          mkdir -p "%GOPATH%\src\github.com\docker"
+          git clone https://github.com/docker/cli.git "%GOPATH%\src\github.com\docker\cli"
+          cd "%GOPATH%\src\github.com\docker\cli"
 
       - name: Setup Go
         uses: actions/setup-go@v5
         with:
           go-version: 1.24
 
-      - name: Ensure module and use vendor
+      - name: Build Windows CLI
         run: |
-          cd cli
+          set GOPATH "%USERPROFILE%\go"
+          set GO111MODULE=off
+          cd "%GOPATH%\src\github.com\docker\cli"         
+          go build -trimpath -ldflags "-s -w" -o cli/docker.exe ./cli/command
 
-          # Init module if missing (temporary module root)
-          if (-not (Test-Path "./go.mod")) {
-            go mod init docker-cli
-          }
+      - name: Create versioned binary
+        run: copy cli\docker.exe cli\docker-v%VERSION%.bravura-1.exe
 
-          # Force Go to use vendor
-          go env -w GOFLAGS="-mod=vendor"
+      - name: Verify binary
+        run: dir cli\docker.exe
 
-      - name: Build Docker CLI
-        run: |
-          set GO111MODULE=on
-          set GOFLAGS=-mod=vendor
-
-          go build -trimpath -tags "" -ldflags "-s -w" -o cli/docker.exe ./cli/command
-
-          copy cli\docker.exe cli\docker-v%VERSION%.bravura-1.exe         
-
-      - name: Verify binaries
-        run: dir cli\docker*.exe
-
-      - name: Upload Windows exe artifacts
+      - name: Upload Windows exe artifact
         uses: actions/upload-artifact@v6
         with:
           name: docker-windows-amd64
           path: |
             cli\docker.exe
-            cli\docker-v${{ github.event.inputs.version }}.bravura-1.exe
+            cli\docker-v%VERSION%.bravura-1.exe
+
 
   windows-docker:
     if: ${{ github.event.inputs.build_target == 'windows-docker' || github.event.inputs.build_target == 'all' }}
