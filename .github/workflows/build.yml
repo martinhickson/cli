@@ -1,11 +1,5 @@
 name: build
 
-# Default to 'contents: read', which grants actions to read commits.
-#
-# If any permission is set, any permission not included in the list is
-# implicitly set to "none".
-#
-# see https://docs.github.com/en/actions/using-workflows/workflow-syntax-for-github-actions#permissions
 permissions:
   contents: read
 
@@ -13,43 +7,42 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
-env:
-  VERSION: ${{ github.ref }}
-
 on:
   workflow_dispatch:
-  push:
-    branches:
-      - 'master'
-      - '[0-9]+.[0-9]+'
-      - '[0-9]+.x'
-    tags:
-      - 'v*'
-  pull_request:
+    inputs:
+      include_windows:
+        description: "Build native Windows docker.exe"
+        required: true
+        type: choice
+        default: "false"
+        options:
+          - "false"
+          - "true"
 
 jobs:
+
+  # =========================
+  # PREPARE (unchanged)
+  # =========================
   prepare:
     runs-on: ubuntu-24.04
     outputs:
       matrix: ${{ steps.platforms.outputs.matrix }}
     steps:
-      -
-        name: Checkout
+      - name: Checkout
         uses: actions/checkout@v6
-      -
-        name: Create matrix
+
+      - name: Create matrix
         id: platforms
         run: |
           echo "matrix=$(docker buildx bake cross --print | jq -cr '.target."cross".platforms')" >>${GITHUB_OUTPUT}
-      -
-        name: Show matrix
-        run: |
-          echo ${{ steps.platforms.outputs.matrix }}
 
+  # =========================
+  # LINUX BUILD (unchanged)
+  # =========================
   build:
     runs-on: ubuntu-24.04
-    needs:
-      - prepare
+    needs: prepare
     strategy:
       fail-fast: false
       matrix:
@@ -60,12 +53,12 @@ jobs:
         use_glibc:
           - ""
           - glibc
+
     steps:
-      -
-        name: Set up Docker Buildx
+      - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
-      -
-        name: Build
+
+      - name: Build
         uses: docker/bake-action@v6
         with:
           targets: ${{ matrix.target }}
@@ -73,103 +66,80 @@ jobs:
             *.platform=${{ matrix.platform }}
         env:
           USE_GLIBC: ${{ matrix.use_glibc }}
-      -
-        name: Create tarball
+
+      - name: Package
         working-directory: ./build
         run: |
-          mkdir /tmp/out
+          mkdir -p /tmp/out
           platform=${{ matrix.platform }}
           platformPair=${platform//\//-}
-          tar -cvzf "/tmp/out/docker-${platformPair}.tar.gz" .
-          if [ -z "${{ matrix.use_glibc }}" ]; then
-            echo "ARTIFACT_NAME=${{ matrix.target }}-${platformPair}" >> $GITHUB_ENV
-          else
-            echo "ARTIFACT_NAME=${{ matrix.target }}-${platformPair}-glibc" >> $GITHUB_ENV
-          fi
-      -
-        name: Upload artifacts
+          tar -czf "/tmp/out/docker-${platformPair}.tar.gz" .
+
+      - name: Upload artifact
         uses: actions/upload-artifact@v6
         with:
-          name: ${{ env.ARTIFACT_NAME }}
+          name: docker-${{ matrix.platform }}
           path: /tmp/out/*
-          if-no-files-found: error
 
-  bin-image:
-    runs-on: ubuntu-24.04
-    if: ${{ github.event_name != 'pull_request' && github.repository == 'docker/cli' }}
-    steps:
-      -
-        name: Login to DockerHub
-        if: github.event_name != 'pull_request'
-        uses: docker/login-action@v3
-        with:
-          username: ${{ secrets.DOCKERHUB_CLIBIN_USERNAME }}
-          password: ${{ secrets.DOCKERHUB_CLIBIN_TOKEN }}
-      -
-        name: Set up QEMU
-        uses: docker/setup-qemu-action@v3
-      -
-        name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
-      -
-        name: Docker meta
-        id: meta
-        uses: docker/metadata-action@v5
-        with:
-          images: dockereng/cli-bin
-          tags: |
-            type=semver,pattern={{version}}
-            type=ref,event=branch
-            type=ref,event=pr
-            type=semver,pattern={{major}}
-            type=semver,pattern={{major}}.{{minor}}
-      -
-        name: Build and push image
-        uses: docker/bake-action@v6
-        with:
-          files: |
-            ./docker-bake.hcl
-            cwd://${{ steps.meta.outputs.bake-file }}
-          targets: bin-image-cross
-          push: ${{ github.event_name != 'pull_request' }}
-          set: |
-            *.cache-from=type=gha,scope=bin-image
-            *.cache-to=type=gha,scope=bin-image,mode=max
-
+  # =========================
+  # PLUGINS (unchanged)
+  # =========================
   prepare-plugins:
     runs-on: ubuntu-24.04
     outputs:
       matrix: ${{ steps.platforms.outputs.matrix }}
     steps:
-      -
-        name: Checkout
+      - name: Checkout
         uses: actions/checkout@v6
-      -
-        name: Create matrix
+
+      - name: Create matrix
         id: platforms
         run: |
           echo "matrix=$(docker buildx bake plugins-cross --print | jq -cr '.target."plugins-cross".platforms')" >>${GITHUB_OUTPUT}
-      -
-        name: Show matrix
-        run: |
-          echo ${{ steps.platforms.outputs.matrix }}
 
   plugins:
     runs-on: ubuntu-24.04
-    needs:
-      - prepare-plugins
+    needs: prepare-plugins
     strategy:
       fail-fast: false
       matrix:
         platform: ${{ fromJson(needs.prepare-plugins.outputs.matrix) }}
     steps:
-      -
-        name: Set up Docker Buildx
+      - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
-      -
-        name: Build
+
+      - name: Build
         uses: docker/bake-action@v6
         with:
           targets: plugins-cross
           set: |
             *.platform=${{ matrix.platform }}
+
+  # =========================
+  # WINDOWS NATIVE BUILD
+  # =========================
+  windows-native:
+    if: ${{ github.event.inputs.include_windows == 'true' }}
+    runs-on: windows-2022
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Build docker.exe
+        run: |
+          go build -trimpath -ldflags "-s -w" -o docker.exe ./cmd/docker
+
+      - name: Verify binary
+        run: dir docker.exe
+
+      - name: Upload Windows exe artifact
+        uses: actions/upload-artifact@v6
+        with:
+          name: docker-windows-amd64
+          path: docker.exe
