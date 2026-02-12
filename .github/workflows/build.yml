@@ -21,6 +21,7 @@ on:
           - dynbinary
           - windows
           - windows-docker
+          - windows-git-bash
 
 jobs:
 
@@ -127,16 +128,16 @@ jobs:
     steps:
       - name: Set up GOPATH
         run: |
-          setx GOPATH "%USERPROFILE%\go"
-          set GOPATH "%USERPROFILE%\go"
-          echo "GOPATH=%USERPROFILE%\go" >> $GITHUB_ENV
+          $env:GOPATH = "$env:USERPROFILE\go"
+          echo "GOPATH=$env:GOPATH" >> $env:GITHUB_ENV
 
       - name: Clone repo into GOPATH
         run: |
-          set GOPATH "%USERPROFILE%\go"
-          mkdir -p "%GOPATH%\src\github.com\docker"
-          git clone https://github.com/docker/cli.git "%GOPATH%\src\github.com\docker\cli"
-          cd "%GOPATH%\src\github.com\docker\cli"
+          $gopath = $env:GOPATH
+          $dest = Join-Path $gopath "src\github.com\docker"
+          New-Item -ItemType Directory -Path $dest -Force
+          git clone https://github.com/docker/cli.git (Join-Path $dest "cli")
+        shell: pwsh
 
       - name: Setup Go
         uses: actions/setup-go@v5
@@ -145,25 +146,62 @@ jobs:
 
       - name: Build Windows CLI
         run: |
-          set GOPATH "%USERPROFILE%\go"
-          set GO111MODULE=off
-          cd "%GOPATH%\src\github.com\docker\cli"         
-          go build -trimpath -ldflags "-s -w" -o cli/docker.exe ./cli/command
-
-      - name: Create versioned binary
-        run: copy cli\docker.exe cli\docker-v%VERSION%.bravura-1.exe
-
-      - name: Verify binary
-        run: dir cli\docker.exe
+          $env:GOPATH = "$env:USERPROFILE\go"
+          $env:GO111MODULE = "off"
+          $cliRoot = Join-Path $env:GOPATH "src\github.com\docker\cli"
+          Set-Location $cliRoot
+          go build -x -trimpath -ldflags "-s -w" -o "docker.exe" ./cmd/docker
+          $versioned = "docker-v$env:VERSION.bravura-1.exe"
+          Copy-Item "docker.exe" $versioned -Force
+          $files = Get-ChildItem -Path . -Filter "docker*.exe" -Recurse | Select-Object -ExpandProperty FullName
+          Write-Host "Found Docker executables:"
+          $files | ForEach-Object { Write-Host $_ }
+        shell: pwsh
 
       - name: Upload Windows exe artifact
         uses: actions/upload-artifact@v6
         with:
           name: docker-windows-amd64
           path: |
-            cli\docker.exe
-            cli\docker-v%VERSION%.bravura-1.exe
+            $($(Get-ChildItem -Path . -Filter "docker*.exe" -Recurse).FullName)
 
+    windows-git-bash:
+    if: ${{ github.event.inputs.build_target == 'windows-git-bash' || github.event.inputs.build_target == 'all' }}
+    runs-on: windows-2022
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Git for Windows
+        shell: pwsh
+        run: |
+          choco install git --version 2.53.0 -y
+          $gitBash = "C:\Program Files\Git\bin"
+          echo "$gitBash" >> $env:GITHUB_PATH
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: 1.24
+
+      - name: Build Windows CLI using Git Bash
+        shell: bash
+        run: |
+          chmod +x scripts/build/binary
+          ./scripts/build/binary
+
+      - name: Upload Windows exe artifacts
+        shell: pwsh
+        run: |
+          $files = Get-ChildItem -Path ./ -Filter "docker*.exe" -Recurse | Select-Object -ExpandProperty FullName
+          echo "Uploading files: $files"
+          echo $files >> $GITHUB_ENV
+
+      - uses: actions/upload-artifact@v6
+        with:
+          name: docker-windows-git-bash
+          path: ${{ env.files }}
 
   windows-docker:
     if: ${{ github.event.inputs.build_target == 'windows-docker' || github.event.inputs.build_target == 'all' }}
