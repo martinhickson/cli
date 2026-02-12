@@ -20,6 +20,7 @@ on:
           - binary
           - dynbinary
           - windows
+          - windows-docker
 
 jobs:
 
@@ -27,7 +28,7 @@ jobs:
   # PREPARE (unchanged)
   # =========================
   prepare:
-    if: ${{ github.event.inputs.build_target != 'windows' }}
+    if: ${{ github.event.inputs.build_target != 'windows' && github.event.inputs.build_target != 'windows-docker' }}
     runs-on: ubuntu-24.04
     outputs:
       matrix: ${{ steps.platforms.outputs.matrix }}
@@ -44,7 +45,7 @@ jobs:
   # LINUX BUILD
   # =========================
   build:
-    if: ${{ github.event.inputs.build_target != 'windows' }}
+    if: ${{ github.event.inputs.build_target != 'windows' && github.event.inputs.build_target != 'windows-docker' }}
     runs-on: ubuntu-24.04
     needs: prepare
     strategy:
@@ -87,7 +88,7 @@ jobs:
   # PLUGINS
   # =========================
   prepare-plugins:
-    if: ${{ github.event.inputs.build_target != 'windows' }}
+    if: ${{ github.event.inputs.build_target != 'windows' && github.event.inputs.build_target != 'windows-docker' }}
     runs-on: ubuntu-24.04
     outputs:
       matrix: ${{ steps.platforms.outputs.matrix }}
@@ -101,7 +102,7 @@ jobs:
           echo "matrix=$(docker buildx bake plugins-cross --print | jq -cr '.target."plugins-cross".platforms')" >>${GITHUB_OUTPUT}
 
   plugins:
-    if: ${{ github.event.inputs.build_target != 'windows' }}
+    if: ${{ github.event.inputs.build_target != 'windows' && github.event.inputs.build_target != 'windows-docker' }}
     runs-on: ubuntu-24.04
     needs: prepare-plugins
     strategy:
@@ -119,9 +120,6 @@ jobs:
           set: |
             *.platform=${{ matrix.platform }}
 
-  # =========================
-  # WINDOWS NATIVE BUILD
-  # =========================
   windows-native:
     if: ${{ github.event.inputs.build_target == 'windows' || github.event.inputs.build_target == 'all' }}
     runs-on: windows-2022
@@ -135,16 +133,59 @@ jobs:
         with:
           go-version: 1.24
 
-      - name: Build Docker CLI
+      - name: Set environment
         run: |
-          cd cli
-          go build -trimpath -ldflags "-s -w" -o docker.exe ./command
+          setx GO111MODULE auto
 
-      - name: Verify binary
-        run: dir docker.exe
+      - name: Build Docker CLI
+        shell: pwsh
+        run: |
+          $env:GO111MODULE="auto"
+          $TARGET = "docker.exe"
+          $SOURCE = ".\cli\command"
+          $GO_BUILDTAGS = ""
+          $GO_LDFLAGS = "-s -w"
+          go build -trimpath -tags $GO_BUILDTAGS -ldflags $GO_LDFLAGS -o $TARGET $SOURCE
 
-      - name: Upload Windows exe artifact
+      - name: Copy versioned binary
+        shell: pwsh
+        run: |
+          copy docker.exe docker-v${{ env.VERSION }}.exe
+
+      - name: Verify binaries
+        shell: pwsh
+        run: |
+          dir .\docker*.exe
+
+      - name: Upload Windows exe artifacts
         uses: actions/upload-artifact@v6
         with:
           name: docker-windows-amd64
-          path: docker.exe
+          path: |
+            docker.exe
+            docker-v${{ env.VERSION }}.exe
+
+
+  windows-docker:
+    if: ${{ github.event.inputs.build_target == 'windows-docker' || github.event.inputs.build_target == 'all' }}
+    runs-on: windows-2022
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build Windows Docker CLI
+        run: |
+          docker buildx bake cross --set "*.platform=windows/amd64" 
+
+      - name: List built binaries
+        run: docker run --rm <image_name> dir C:\path\to\output  # adjust path if needed
+
+      - name: Upload Windows Docker artifacts
+        uses: actions/upload-artifact@v6
+        with:
+          name: docker-windows-docker
+          path: ./build/*   # adjust to match your Docker output
