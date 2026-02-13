@@ -1,7 +1,7 @@
 name: build
 
 permissions:
-  contents: read
+  contents: write
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -125,6 +125,9 @@ jobs:
     if: ${{ github.event.inputs.build_target == 'windows' || github.event.inputs.build_target == 'all' }}
     runs-on: windows-2022
 
+    env:
+      VERSION: 29.2.1
+
     steps:
       - name: Set up GOPATH
         run: |
@@ -150,8 +153,13 @@ jobs:
           $env:GO111MODULE = "off"
           $cliRoot = Join-Path $env:GOPATH "src\github.com\docker\cli"
           Set-Location $cliRoot
-          go build -x -trimpath -ldflags "-s -w" -o "docker.exe" ./cmd/docker
-          $versioned = "docker-v$env:VERSION.bravura-1.exe"
+          go build -trimpath `
+            -ldflags "-s -w `
+            -X github.com/docker/cli/cli/version.Version=29.2.1.bravura-1 `
+            -X github.com/docker/cli/cli/version.GitCommit=73fb37341bd10886885873244bdf6e5c486a5267 `
+            -X github.com/docker/cli/cli/version.BuildTime=2026-02-16T13:44:00Z" `
+            -o "docker.exe" ./cmd/docker
+          $versioned = "docker-v29.2.1.bravura-1.exe"
           Copy-Item "docker.exe" $versioned -Force
           $files = Get-ChildItem -Path . -Filter "docker*.exe" -Recurse | Select-Object -ExpandProperty FullName
           Write-Host "Found Docker executables: "
@@ -165,6 +173,40 @@ jobs:
           path: |
             C:\Users\runneradmin\go\src\github.com\docker\cli\docker-v29.2.1.bravura-1.exe
             C:\Users\runneradmin\go\src\github.com\docker\cli\docker.exe
+
+      - name: Create GitHub Release
+        id: create_release
+        uses: actions/create-release@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tag_name: v${{ env.VERSION }}
+          release_name: Docker CLI ${{ env.VERSION }}
+          draft: false
+          prerelease: false
+          body: "Automated build of Docker CLI ${{ env.VERSION }}"
+
+      - name: Upload release assets
+        uses: actions/upload-release-asset@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          upload_url: ${{ steps.create_release.outputs.upload_url }}
+          asset_path: C:\Users\runneradmin\go\src\github.com\docker\cli\docker.exe
+          asset_name: docker.exe
+          asset_content_type: application/octet-stream
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Upload versioned release asset
+        uses: actions/upload-release-asset@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          upload_url: ${{ steps.create_release.outputs.upload_url }}
+          asset_path: C:\Users\runneradmin\go\src\github.com\docker\cli\docker-v29.2.1.bravura-1.exe
+          asset_name: docker-v${{ env.VERSION }}.bravura-1.exe
+          asset_content_type: application/octet-stream
+          token: ${{ secrets.GITHUB_TOKEN }}
 
   windows-git-bash:
     if: ${{ github.event.inputs.build_target == 'windows-git-bash' || github.event.inputs.build_target == 'all' }}
