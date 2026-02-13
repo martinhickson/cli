@@ -154,7 +154,7 @@ jobs:
           $versioned = "docker-v$env:VERSION.bravura-1.exe"
           Copy-Item "docker.exe" $versioned -Force
           $files = Get-ChildItem -Path . -Filter "docker*.exe" -Recurse | Select-Object -ExpandProperty FullName
-          Write-Host "Found Docker executables:"
+          Write-Host "Found Docker executables: "
           $files | ForEach-Object { Write-Host $_ }
         shell: pwsh
 
@@ -163,9 +163,10 @@ jobs:
         with:
           name: docker-windows-amd64
           path: |
-            $($(Get-ChildItem -Path . -Filter "docker*.exe" -Recurse).FullName)
+            C:\Users\runneradmin\go\src\github.com\docker\cli\docker-v29.2.1.bravura-1.exe
+            C:\Users\runneradmin\go\src\github.com\docker\cli\docker.exe
 
-    windows-git-bash:
+  windows-git-bash:
     if: ${{ github.event.inputs.build_target == 'windows-git-bash' || github.event.inputs.build_target == 'all' }}
     runs-on: windows-2022
 
